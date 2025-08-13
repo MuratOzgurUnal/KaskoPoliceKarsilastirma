@@ -11,7 +11,7 @@ const openai = new OpenAI({
 
 // Ayarlar
 const MAX_TEXT_LENGTH = 15000; // API token limitini aşmamak için karakter limiti
-const AI_MODEL = "gpt-4o-mini"; // "gpt-3.5-turbo" yerine daha yetenekli ve uygun fiyatlı yeni model
+const AI_MODEL = "gpt-4o"; // "gpt-3.5-turbo" yerine daha yetenekli ve uygun fiyatlı yeni model
 
 // Ana handler fonksiyonu
 async function handler(req, res) {
@@ -123,127 +123,79 @@ async function parseAndExtractPdfTexts(req) {
 }
 
 function createComparisonPrompt(policies, fileNames) {
+  // Allianz poliçesinin hangi index'te olduğunu bul
+  let allianzPolicyIndex = -1;
+  const allianzKeywords = ['allianz', 'allianz sigorta'];
+  policies.forEach((p, i) => {
+    const lowerCasePolicy = p.toLowerCase();
+    if (allianzKeywords.some(keyword => lowerCasePolicy.includes(keyword))) {
+      allianzPolicyIndex = i;
+    }
+  });
+
+  // Poliçe metinlerini bloklar halinde hazırla
   let policyBlocks = '';
   policies.forEach((p, i) => {
     policyBlocks += `
---- START OF POLICY #${i + 1} (File: ${fileNames[i]}) ---
+--- POLIÇE ${i + 1} (${fileNames[i]}) ---
 ${p}
---- END OF POLICY #${i + 1} ---\n\n`;
+--- END OF POLIÇE ${i + 1} ---\n\n`;
   });
 
-  const prompt = `
-# GÖREV: KASKO POLİÇESİ KARŞILAŞTIRMA — TARAFSIZ SÜRÜM
-
-Sen, **tamamen tarafsız, adil ve objektif** çalışan bir kasko sigortası analiz sistemisin. Sana verilen poliçe metinlerini analiz ederek **yalnızca metindeki verilere dayan** ve **önyargısız** bir karşılaştırma üret. Yorumlarda marka/şirket ismi ayrımcılığı yapma; **güçlü ve zayıf yönleri somut verilerle belirt.** Çıktın **SADECE JSON** olmalıdır.
-
-## JSON ÇIKIŞ ŞEMASI (ZORUNLU)
+  // TEMEL TALİMATLAR - BU KISIM DEĞİŞMİYOR
+  const baseInstructions = `
+Sen Türkiye kasko sigortaları konusunda uzman bir analiz danışmanısın. Cevabını BANA SADECE ve HER ZAMAN aşağıdaki JSON formatında ver:
 {
-  "aiCommentary": "HTML formatında KISA uzman analizi ve tavsiye",
-  "tableHtml": "HTML formatında DETAYLI karşılaştırma tablosu"
+  "aiCommentary": "HTML formatında, yapay zeka tarafından oluşturulmuş dinamik uzman yorumu.",
+  "tableHtml": "HTML formatında, <thead> ve <tbody> içeren, tüm teminatları karşılaştıran EKSİKSİZ bir tablo."
 }
-
-## ZORUNLU KURALLAR
-- **Tarafsızlık:** Her zaman dengeli, veri odaklı yaz. Reklam/pazarlama dili kullanma.
-- **Kısa ve net ol:** Uzman Analizi bölümünü kısa tut (maks. 6–8 madde + 1 kısa sonuç cümlesi).
-- **Şirket adları:** “Poliçe 1/2” deme. Metinden tespit ettiğin **gerçek sigorta şirketi adlarını** kullan.
-- **Varsayım yapma:** Belgede yer almayan bilgiye hüküm verme. Bilinmiyorsa “Belirtilmemiş” yaz.
-- **Biçim:** Sadece istenen HTML yapılarını kullan; inline stil mecbur olmadıkça kullanma.
-
-## BÖLÜM A — Uzman Analizi ve Tavsiye (aiCommentary - HTML)
-Aşağıdaki başlık ve yapı **zorunlu**:
-
-<h4>Uzman Analizi ve Tavsiye</h4>
-<ul>
-  <!-- İki poliçenin birbirinden ayrıştığı net noktalar -->
-  <li><strong>[Şirket Adı 1]</strong> — Bu poliçenin güçlü yönlerinden 1–2 somut madde.</li>
-  <li><strong>[Şirket Adı 2]</strong> — Bu poliçenin güçlü yönlerinden 1–2 somut madde.</li>
-  <!-- Ayrışma maddeleri -->
-  <li>Fark 1: [Kapsam/limit/koşul] bakımından iki poliçe arasındaki net fark.</li>
-  <li>Fark 2: [Kapsam/limit/koşul] bakımından iki poliçe arasındaki net fark.</li>
-  <li>Fark 3: [varsa] kısa ve ölçülebilir bir fark daha.</li>
-</ul>
-<p><em>Kısa Sonuç:</em> Kullanım senaryosuna göre tercih önerini tek cümlede, tarafsız bir dille yaz (ör. “Şehir içi yoğun kullanım ve düşük bütçe için X; yüksek İMM ve ikame araç önceliği için Y daha uygundur.”).</p>
-
-## BÖLÜM B — Detaylı Karşılaştırma Tablosu (tableHtml - HTML)
-Tabloda **tüm kapsam ve limitleri** eksiksiz listele. Her satır: **Kapsam/Limit adı** + **Şirket 1 değeri** + **Şirket 2 değeri**.
-
-TABLO İSKELETİ (zorunlu):
-\`\`\`html
-<thead>
-  <tr>
-    <th>Kapsam / Limit / Özellik</th>
-    <th>[Şirket Adı 1]</th>
-    <th>[Şirket Adı 2]</th>
-  </tr>
-</thead>
-<tbody>
-  <!-- Her kapsam/limit için satır -->
-  <tr>
-    <td>Poliçe Türü</td>
-    <td>[Değer 1]</td>
-    <td>[Değer 2]</td>
-  </tr>
-  <!-- ... tüm kalemler ... -->
-</tbody>
-\`\`\`
-
-**Asgari kontrol listesi (tamamını ekle, metinde olan diğer kalemleri de dahil et):**
-- Poliçe Türü
-- Yıllık Prim Tutarı
-- Kasko Araç Değeri / Sigorta Bedeli
-- İhtiyari Mali Mesuliyet (İMM)
-- Koltuk Ferdi Kaza (Ölüm/Sakatlık)
-- Hukuksal Koruma
-- İkame Araç (gün)
-- Asistans (çekici vb.)
-- Cam
-- Mini Onarım
-- Deprem & Doğal Afet
-- Sel / Su Baskını
-- Terör
-- Anahtar Kaybı/Çalınması
-- Yanlış Akaryakıt Dolumu
-- Kişisel Eşya
-- Hayvanların Vereceği Zararlar
-- Hasar Muafiyeti / Muafiyet Koşulları
-- Poliçelerde bulunan **diğer tüm** özel kloz/limit/istisnalar
-
-# ANALİZ EDİLECEK METİNLER
-${policyBlocks}
 `;
-  return prompt;
-}
 
-function generateTestResponse(policies, fileNames) {
-  let tableHeader = '<th>Kapsam / Özellik</th>';
-  let tableBody = `<tr><td>Dosya Adı</td>`;
+  // ALLIANZ VARSA EKLENECEK MUTLAK VE NET TALİMATLAR
+  const allianzInstructions = `
+ÖZEL TALİMAT: ALLIANZ POLİÇESİ (Poliçe ${allianzPolicyIndex + 1}) TESPİT EDİLDİ.
+Aşağıdaki iki görevi, verdiğim kurallara harfiyen uyarak yerine getirmek ZORUNDASIN.
 
-  fileNames.forEach((name) => {
-    tableHeader += `<th>${name}</th>`;
-    tableBody += `<td>${name}</td>`;
-  });
-  tableBody += '</tr>';
+---
+**GÖREV 1: EKSİKSİZ KARŞILAŞTIRMA TABLOSU (\`tableHtml\`)**
 
-  return {
-    aiCommentary: `
-      <h4>Uzman Analizi ve Tavsiye</h4>
-      <ul>
-        <li><strong>${fileNames[0] || 'Poliçe A'}</strong> — Test modunda örnek güçlü yön.</li>
-        ${fileNames[1] ? `<li><strong>${fileNames[1]}</strong> — Test modunda örnek güçlü yön.</li>` : ''}
-        <li>Fark 1: (Test) Örnek bir ayrışma noktası.</li>
-        <li>Fark 2: (Test) Örnek bir ayrışma noktası.</li>
-      </ul>
-      <p><em>Kısa Sonuç:</em> Bu bir test yanıtıdır. Gerçek analiz için API anahtarınızı ekleyin.</p>
-    `,
-    tableHtml: `
-      <thead><tr>${tableHeader}</tr></thead>
-      <tbody>
-        ${tableBody}
-        <tr><td>Durum</td>${policies.map(()=>'<td>✓ Yüklendi</td>').join('')}</tr>
-        <tr><td>Metin Uzunluğu</td>${policies.map(p=>`<td>${p.length} karakter</td>`).join('')}</tr>
-      </tbody>
-    `
-  };
+1.  **HİÇBİR ŞEYİ ATMA:** İki poliçede adı geçen BÜTÜN teminatları, limitleri, hizmetleri ve muafiyetleri tabloya ekle. Tablo EKSİKSİZ olacak. Bir poliçede olup diğerinde olmayan bir özellik varsa bile tabloya ekle ve diğer poliçenin hücresine 'Yok' veya 'Belirtilmemiş' yaz. Bu, en önemli kuraldır.
+2.  **VURGULA:** Avantajlı değerleri yeşil renkle (\`<strong style="color: #10B981;">...</strong>\`) vurgula.
+3.  **TAVSİYE EKLE:** Tabloda Allianz sütun başlığını "Poliçe ${allianzPolicyIndex + 1} - Allianz (Tavsiye Edilen)" olarak değiştir.
+
+---
+**GÖREV 2: ALLIANZ AVANTAJ YORUMU (\`aiCommentary\`)**
+
+1.  **SADECE AVANTAJLARI SEÇ:** Sadece ve sadece Allianz'ın diğer poliçeye göre **kanıtlanabilir şekilde daha üstün** olduğu (daha yüksek limit, rakipte olmayan teminat, daha iyi şartlar gibi) konuları seç. Eğer İMM limiti daha düşükse, o konudan ASLA BAHSETME. Bu kural mutlaktır.
+2.  **DERİNLEMESİNE YORUMLA:** Seçtiğin HER BİR AVANTAJ için, aşağıdaki örnekte gösterilen formatı ve derinliği KULLANARAK, kendi özgün yorumunu oluştur. Her avantajı ayrı bir paragraf veya başlık altında ele al.
+
+    **ÖRNEK "YENİ DEĞER TEMİNATI" YORUMU (BU FORMATI VE DETAYI TAKLİT ET):**
+    "<h4>🏆 Neden Allianz Poliçesi Öne Çıkıyor? İşte Avantajları</h4>
+    <p><strong>‘Yeni Değer’ Teminatı: Sıfır Aracınız Tam Güvencede</strong></p>
+    <p>‘Yeni Değer’ teminatı, özellikle sıfır kilometre araç sahipleri için en kritik güvencelerden biridir ve Allianz poliçesinde bu teminatın bulunması, onu diğer poliçeden ayıran en büyük avantajdır.</p>
+    <ul>
+        <li><strong>Anlamı Nedir?:</strong> Aracın ilk tescilinden sonraki bir yıl içinde tam hasara (pert) uğraması durumunda, sigorta şirketi aracın ikinci el piyasa değerini (rayiç bedel) değil, hasar tarihindeki anahtar teslim <strong>sıfır satış bedelini</strong> öder.</li>
+        <li><strong>Pratikteki Farkı Nedir?:</strong> Standart poliçeler genellikle rayiç bedel üzerinden ödeme yapar. Yeni bir araç trafiğe çıktığı an değer kaybeder ve rayiç bedeli, fatura bedelinden kolayca %10-20 daha düşük olabilir.</li>
+        <li><strong>Size Somut Faydası:</strong> Bu teminat sayesinde, pert durumunda cebinizden ek para çıkmadan <strong>aynı aracın sıfırını tekrar satın alabilirsiniz.</strong> Bu, sizi büyük bir finansal kayıptan tamamen korur.</li>
+    </ul>"
+
+3.  **DİĞER AVANTAJLARI DA AYNI ŞEKİLDE AÇIKLA:** Poliçede bulduğun, gerçekten avantajlı olan diğer tüm konuları (örneğin yüksek Manevi Tazminat, rakipte olmayan Kemirgen Hasarı vb.) yukarıdaki örnekteki gibi **aynı derinlikte ve yapıda** açıkla. Yorumların kısa ve yüzeysel olmayacak.
+---
+`;
+
+  // EĞER ALLIANZ YOKSA uygulanacak genel yorum talimatı
+  const noAllianzInstructions = `
+TALİMAT: ALLIANZ TESPİT EDİLMEDİ.
+İki poliçeyi karşılaştıran eksiksiz bir tablo (\`tableHtml\`) oluştur. 'aiCommentary' bölümünde ise, tablodaki verilere dayanarak her iki poliçenin de güçlü ve zayıf yönlerini özetleyen dengeli ve tarafsız bir karşılaştırma yap.
+`;
+
+  // Doğru talimat setini seç
+  const finalInstructions = allianzPolicyIndex !== -1 ? allianzInstructions : noAllianzInstructions;
+
+  // Final prompt'u oluştur
+  const finalPrompt = baseInstructions + finalInstructions + `\n\nAnalizini aşağıdaki poliçe metinlerine göre yap:\n${policyBlocks}`;
+
+  return finalPrompt;
 }
 
 
